@@ -1,0 +1,25 @@
+{
+	"compilerOptions": {
+		"rootDir": "./src",
+		"outDir": "./dist",
+		"importHelpers": true,
+		"declaration": true,
+		"alwaysStrict": true,
+		"sourceMap": true,
+		"target": "es2022",
+		"lib": ["ES2021"],
+		"esModuleInterop": true,
+		"noImplicitReturns": true,
+		"noImplicitThis": true,
+		"noImplicitAny": false,
+		"resolveJsonModule": true,
+		"module": "Node16",
+		"moduleResolution": "node16",
+		"isolatedModules": true,
+		"strictNullChecks": false,
+		"stripInternal": true,
+		"noFallthroughCasesInSwitch": true,
+		"noEmitOnError": true,
+		"skipLibCheck": true
+	}
+}
