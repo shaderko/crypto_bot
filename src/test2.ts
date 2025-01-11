@@ -25,10 +25,12 @@ const WETH_ADDRESS = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
 class PairManager extends EventEmitter {
 	pairs: Pair[];
 
-	constructor() {
+	constructor(onSwap: () => void = undefined) {
 		super();
 
 		this.pairs = [];
+
+		if (onSwap) this.on('swap', onSwap);
 	}
 
 	addPair(
@@ -44,16 +46,21 @@ class PairManager extends EventEmitter {
 				factory,
 				provider,
 				this.registerPair.bind(this),
-				this.print.bind(this)
+				this.onSwap.bind(this)
 			)
 		);
+	}
+
+	onSwap() {
+		this.emit('swap');
 	}
 
 	registerPair(pair: Pair) {
 		pair.contract.on(
 			'Swap',
+
 			(
-				args: [
+				...args: [
 					sender: string,
 					amount0In: ethers.BigNumberish,
 					amount1In: ethers.BigNumberish,
@@ -62,7 +69,9 @@ class PairManager extends EventEmitter {
 					to: string,
 					event: ethers.ContractEvent
 				]
-			) => pair.processSwap(...args)
+			) => {
+				pair.processSwap(...args);
+			}
 		);
 	}
 
@@ -70,7 +79,20 @@ class PairManager extends EventEmitter {
 		this.pairs.forEach((pair) => {
 			console.log(`${pair.token0.name}-${pair.token1.name}`);
 
-			console.table(pair.swaps);
+			console.table(
+				pair.swaps.map((swap: Swap) => {
+					return {
+						tokenIn: swap.tokenIn.name,
+						amountIn: ethers.formatUnits(swap.amountIn, swap.tokenIn.decimals),
+						amountOut: ethers.formatUnits(
+							swap.amountOut,
+							swap.tokenOut.decimals
+						),
+						out: swap.tokenOut.name,
+						createdAt: swap.createdAt,
+					};
+				})
+			);
 		});
 	}
 }
@@ -108,21 +130,42 @@ class Pair extends EventEmitter {
 		factory: ethers.ethers.Contract,
 		provider: ethers.ethers.InfuraWebSocketProvider
 	) {
-		this.address = await factory.getPair(
-			this.token0.getAddress(),
-			this.token1.getAddress()
-		);
+		try {
+			this.address = await factory.getPair(
+				this.token0.getAddress(),
+				this.token1.getAddress()
+			);
 
-		this.contract = new ethers.Contract(
-			this.address,
-			UNISWAP_V2_ROUTER_ABI,
-			provider
-		);
+			this.contract = new ethers.Contract(
+				this.address,
+				UNISWAP_V2_ROUTER_ABI,
+				provider
+			);
 
-		this.emit('init', this);
+			const token0_address = await this.contract.token0();
 
-		console.log('Initialized Pair: ', this.address);
+			if (token0_address !== this.token0.address) {
+				const tempToken = this.token0;
+				this.token0 = this.token1;
+				this.token1 = tempToken;
+			}
+
+			this.emit('init', this);
+
+			console.log(`Initialized Pair: ${this.token0.name}-${this.token1.name}`);
+		} catch (err) {
+			console.error(
+				'Either rate limit or something happened, retrying...',
+				err
+			);
+			setTimeout(() => {
+				this.Init(factory, provider);
+			}, 5000);
+		}
 	}
+
+	// console.log('\x1b[32m BUY ORDER \x1b[0m');
+	// console.log('\x1b[31m SELL ORDER \x1b[0m');
 
 	async processSwap(
 		sender: string,
@@ -133,63 +176,38 @@ class Pair extends EventEmitter {
 		to: string,
 		event: ethers.ContractEvent
 	) {
-		const token0 = await this.contract.token0();
-		const token1 = await this.contract.token1();
+		try {
+			const amount0OutBN = BigInt(amount0Out);
+			const amount1OutBN = BigInt(amount1Out);
+			const amount0InBN = BigInt(amount0In);
+			const amount1InBN = BigInt(amount1In);
 
-		let token0In: ethers.BigNumberish | undefined,
-			token0Out: ethers.BigNumberish | undefined,
-			token1In: ethers.BigNumberish | undefined,
-			token1Out: ethers.BigNumberish | undefined;
+			const amountIn = amount0InBN ? amount0InBN : amount1InBN;
+			const amountOut = amount0OutBN ? amount0OutBN : amount1OutBN;
 
-		if (token0 === this.token0.address) {
-			if (amount0In) {
-				token0In = amount0In;
-				token1Out = amount1Out;
-			} else {
-				token0Out = amount0Out;
-				token1In = amount1In;
-			}
-		} else {
-			if (amount1In) {
-				token0In = amount1In;
-				token1Out = amount0Out;
-			} else {
-				token0Out = amount1Out;
-				token1In = amount0In;
-			}
-		}
+			const tokenIn = amount0InBN ? this.token0 : this.token1;
+			const tokenOut = amount0OutBN ? this.token0 : this.token1;
 
-		if (token0In && token1Out) {
-			// BUY
-			console.log('\x1b[32m BUY ORDER \x1b[0m');
+			// Create and store the swap
 			this.swaps.push(
-				new Swap(
+				new Swap(sender, tokenIn, amountIn, tokenOut, amountOut, to, event)
+			);
+
+			this.emit('swap');
+		} catch (err) {
+			console.error('Failed to get addresses of tokens, retrying', err);
+			setTimeout(() => {
+				this.processSwap(
 					sender,
-					this.token0,
-					token0In,
-					this.token1,
-					token1Out,
+					amount0In,
+					amount1In,
+					amount0Out,
+					amount1Out,
 					to,
 					event
-				)
-			);
-		} else if (token0Out && token1In) {
-			// SELL
-			console.log('\x1b[31m SELL ORDER \x1b[0m');
-			this.swaps.push(
-				new Swap(
-					sender,
-					this.token1,
-					token1In,
-					this.token0,
-					token0Out,
-					to,
-					event
-				)
-			);
+				);
+			}, 2000);
 		}
-
-		this.emit('swap');
 	}
 }
 
@@ -241,8 +259,6 @@ class TokenManager extends EventEmitter {
 }
 
 class Token {
-	isInitialized: boolean;
-
 	address: string;
 
 	name: string;
@@ -256,23 +272,26 @@ class Token {
 	) {
 		this.address = address;
 
-		this.isInitialized = false;
-
 		this.Init(provider);
 	}
 
 	async Init(provider: ethers.ethers.InfuraWebSocketProvider): Promise<void> {
-		this.contract = new ethers.Contract(this.address, ERC20_ABI, provider);
+		try {
+			this.contract = new ethers.Contract(this.address, ERC20_ABI, provider);
 
-		const [name, decimals] = await Promise.all([
-			this.contract.name(),
-			this.contract.decimals(),
-		]);
+			const [name, decimals] = await Promise.all([
+				this.contract.name(),
+				this.contract.decimals(),
+			]);
 
-		this.name = name;
-		this.decimals = decimals;
-
-		this.isInitialized = true;
+			this.name = name;
+			this.decimals = decimals;
+		} catch (err) {
+			console.error(err);
+			setTimeout(() => {
+				this.Init(provider);
+			}, 5000);
+		}
 	}
 
 	getAddress() {
@@ -317,8 +336,13 @@ class SwapManager {
 
 class Swap {
 	sender: string;
+
+	tokenIn: Token;
 	amountIn: ethers.BigNumberish;
+
+	tokenOut: Token;
 	amountOut: ethers.BigNumberish;
+
 	to: string;
 	event: ethers.ContractEvent;
 
@@ -334,11 +358,15 @@ class Swap {
 		event: ethers.ContractEvent
 	) {
 		this.sender = sender;
+
+		this.tokenIn = tokenIn;
+		this.amountIn = amountIn;
+
+		this.tokenOut = tokenOut;
+		this.amountOut = amountOut;
+
 		this.to = to;
 		this.event = event;
-
-		this.amountIn = amountIn;
-		this.amountOut = amountOut;
 
 		this.createdAt = new Date();
 	}
@@ -372,13 +400,17 @@ class Bot {
 		);
 
 		this.swapManager = new SwapManager();
-		this.pairManager = new PairManager();
+		this.pairManager = new PairManager(this.onSwap.bind(this));
 		this.tokenManager = new TokenManager(
 			'tokens.json',
 			this.provider,
 			this.factory,
 			this.pairManager.addPair.bind(this.pairManager)
 		);
+	}
+
+	onSwap() {
+		this.print();
 	}
 
 	print() {
