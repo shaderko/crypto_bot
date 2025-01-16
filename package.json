@@ -4,7 +4,7 @@
     "description": "Interesting crypto bot",
     "main": "./dist/test2.js",
     "scripts": {
-        "build": "tsc",
+        "build": "tsc && cp tokens.json dist",
         "start": "node dist/test2.js"
     },
     "dependencies": {
