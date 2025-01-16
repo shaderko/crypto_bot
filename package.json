@@ -1,8 +1,16 @@
 {
-  "dependencies": {
-    "ethers": "^6.13.5"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.3"
-  }
+    "name": "crypto-bot",
+    "version": "1.0.0",
+    "description": "Interesting crypto bot",
+    "main": "./dist/test2.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/test2.js"
+    },
+    "dependencies": {
+        "ethers": "^6.13.5"
+    },
+    "devDependencies": {
+        "typescript": "^5.7.3"
+    }
 }
